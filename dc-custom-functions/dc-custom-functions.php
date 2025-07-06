@@ -2,7 +2,7 @@
 /*
 Plugin Name: DC Custom Functions
 Description: Plugin modular de otimizações profissionais para WordPress.
-Version: 2.1.0
+Version: 1.1.0
 Author: Daniel Costa
 License: GPLv2 or later
 */
