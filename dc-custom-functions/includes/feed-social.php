@@ -64,7 +64,7 @@ add_action('template_redirect', function() {
         ?>
 <rss version="2.0">
 <channel>
-    <title><?php bloginfo_rss('name'); ?> - Feed Social</title>
+    <title><?php bloginfo_rss('name'); ?> - Post Feed</title>
     <link><?php bloginfo_rss('url'); ?></link>
     <description>Post aleatório atualizado por agendamento</description>
     <language><?php bloginfo_rss('language'); ?></language>
@@ -114,21 +114,21 @@ add_action('template_redirect', function() {
     }
 });
 
-// Tela no admin
+// Tela no admin (Página principal do menu Post Feed)
 add_action('admin_menu', function() {
     add_options_page(
-        'Configurações do Feed Social',
-        'Feed Social',
-        'manage_options',
-        'dc_feed_social',
-        'dc_feed_social_settings_page'
+        'Configurações do Post Feed', // Page Title
+        'Post Feed', // Menu Title - Será um item de menu de nível superior em 'Configurações'
+        'manage_options', // Capability
+        'dc_feed_social', // Menu Slug
+        'dc_feed_social_settings_page' // Callback function
     );
 });
 
 function dc_feed_social_settings_page() {
     ?>
     <div class="wrap">
-        <h1>Configurações do Feed Social</h1>
+        <h1>Configurações do Post Feed</h1>
         <form method="post" action="options.php">
             <?php
             settings_fields('dc_feed_social_settings');
@@ -136,7 +136,12 @@ function dc_feed_social_settings_page() {
             submit_button();
             ?>
         </form>
-    </div>
+        <hr>
+        <p><strong>URL do Post Feed:</strong> <code><?php echo esc_url(home_url('/feed-social.xml')); ?></code></p>
+        <p><strong>Importante:</strong> Após a instalação inicial deste plugin ou se o feed não estiver funcionando, por favor, vá em <a href="<?php echo esc_url(admin_url('options-permalink.php')); ?>">Configurações > Links Permanentes</a> e clique em "Salvar Alterações" para atualizar as regras de reescrita do WordPress.</p>
+        <hr>
+        <p>Esta página controla o feed de posts aleatórios (<code>/feed-social.xml</code>).</p>
+        </div>
     <?php
 }
 
@@ -149,7 +154,7 @@ add_action('admin_init', function() {
 
     add_settings_section(
         'dc_feed_social_main',
-        'Configurações de Intervalo',
+        'Configurações de Intervalo do Post Feed',
         null,
         'dc_feed_social'
     );
