@@ -20,6 +20,8 @@ add_action('init', function() {
 
 // Reagendar e sortear nova imagem ao mudar o intervalo
 add_action('update_option_dc_image_feed_interval_hours', function($old_value, $value) {
+    // Ação acionada APENAS quando a opção 'dc_image_feed_interval_hours' é atualizada.
+    // Isso garante que o feed só é forçado a mudar quando a frequência é alterada.
     wp_clear_scheduled_hook('dc_feed_random_image_event');
     wp_schedule_event(time(), 'dc_dynamic_image_hours', 'dc_feed_random_image_event');
     do_action('dc_feed_random_image_event'); // Força a atualização imediatamente
@@ -31,8 +33,11 @@ add_action('dc_feed_random_image_event', function() {
     $selected_image_ids_str = get_option('dc_selected_image_ids', '');
     $selected_image_ids = array_filter(array_map('intval', explode(',', $selected_image_ids_str)));
 
+    error_log("DC Image Feed Cron: Running. Selected IDs string: " . $selected_image_ids_str); // Debugging
+
     if (empty($selected_image_ids)) {
         update_option('dc_feed_current_image', 0); // Limpa se não houver imagens selecionadas
+        error_log("DC Image Feed Cron: No images selected. Current image set to 0."); // Debugging
         return;
     }
 
@@ -40,30 +45,43 @@ add_action('dc_feed_random_image_event', function() {
     $max_attempts = 5;
     $attempt = 0;
     $new_image_id = 0;
+    $valid_selected_ids = []; // Para armazenar IDs válidos durante o processo de seleção
+
+    // Filtra IDs inválidos de antemão para eficiência e melhor lógica
+    foreach ($selected_image_ids as $id) {
+        if (wp_attachment_is_image($id)) {
+            $valid_selected_ids[] = $id;
+        }
+    }
+
+    if (empty($valid_selected_ids)) {
+        update_option('dc_feed_current_image', 0);
+        update_option('dc_selected_image_ids', ''); // Limpa seleções inválidas
+        error_log("DC Image Feed Cron: All previously selected images are invalid. Current image set to 0 and selections cleared."); // Debugging
+        return;
+    }
+
+    // Garante que a opção `dc_selected_image_ids` contenha apenas IDs de imagens válidas
+    // Isso é importante se algumas imagens foram deletadas após a seleção.
+    if (count($valid_selected_ids) !== count($selected_image_ids)) {
+        update_option('dc_selected_image_ids', implode(',', $valid_selected_ids));
+        error_log("DC Image Feed Cron: Updated selected_image_ids to contain only valid image IDs."); // Debugging
+    }
+
 
     do {
-        $random_key = array_rand($selected_image_ids);
-        $potential_new_image_id = $selected_image_ids[$random_key];
-
-        // Verifica se a imagem ainda existe e é um anexo válido
-        if (wp_attachment_is_image($potential_new_image_id)) {
-            $new_image_id = $potential_new_image_id;
-        } else {
-            // Se a imagem não for válida, remove do array de selecionadas para evitar futuras tentativas
-            $key_to_remove = array_search($potential_new_image_id, $selected_image_ids);
-            if ($key_to_remove !== false) {
-                unset($selected_image_ids[$key_to_remove]);
-                update_option('dc_selected_image_ids', implode(',', $selected_image_ids));
-            }
-        }
+        $random_key = array_rand($valid_selected_ids);
+        $potential_new_image_id = $valid_selected_ids[$random_key];
+        $new_image_id = $potential_new_image_id; // Como pré-filtramos, isso deve ser válido
         $attempt++;
-    } while (($new_image_id === 0 || $new_image_id === $previous_image_id) && $attempt < $max_attempts && !empty($selected_image_ids));
-
+    } while ($new_image_id === $previous_image_id && count($valid_selected_ids) > 1 && $attempt < $max_attempts); // Tenta novamente apenas se houver mais de uma imagem válida
 
     if ($new_image_id) {
         update_option('dc_feed_current_image', $new_image_id);
+        error_log("DC Image Feed Cron: New image ID selected: " . $new_image_id); // Debugging
     } else {
-        update_option('dc_feed_current_image', 0); // Nenhuma imagem válida encontrada
+        update_option('dc_feed_current_image', 0); // Não deve acontecer se valid_selected_ids não estiver vazio
+        error_log("DC Image Feed Cron: Failed to select a new image ID."); // Debugging
     }
 });
 
@@ -90,10 +108,15 @@ add_action('template_redirect', function() {
     <pubDate><?php echo date(DATE_RSS); ?></pubDate>
 <?php
     $image_id = get_option('dc_feed_current_image');
+    error_log("DC Image Feed XML: Attempting to generate XML for image ID: " . $image_id); // Debugging
+
     if ($image_id && wp_attachment_is_image($image_id)) :
         $image_url = wp_get_attachment_url($image_id);
         $image_title = get_the_title($image_id);
-        $image_description = get_post_field('post_content', $image_id); // Usa post_content como descrição
+        $image_description = get_post_field('post_content', $image_id);
+        if (empty($image_description)) {
+            $image_description = $image_title; // Fallback para o título se a descrição estiver vazia
+        }
         $guid = $image_url;
         $pubDate = get_post_time('r', false, $image_id);
 ?>
@@ -103,9 +126,14 @@ add_action('template_redirect', function() {
         <guid isPermaLink="true"><?php echo esc_url($guid); ?></guid>
         <pubDate><?php echo $pubDate; ?></pubDate>
         <description><![CDATA[<?php echo esc_html($image_description); ?>]]></description>
-        <image_link><?php echo esc_url($image_url); ?></image_link>
+        <image_id><?php echo esc_html($image_id); ?></image_id>
+        <image_url><?php echo esc_url($image_url); ?></image_url>
     </item>
 <?php
+    else :
+        // Comentário de depuração no XML se nenhuma imagem válida for encontrada
+?>
+    <?php
     endif;
 ?>
 </channel>
@@ -115,14 +143,14 @@ add_action('template_redirect', function() {
     }
 });
 
-// Adiciona a sub-página no admin
+// Adiciona a página de configurações de imagem no admin como um item de menu de nível superior
 add_action('admin_menu', function() {
     add_options_page(
-        'Configurações do Feed de Imagens',
-        'Image Feed',
-        'manage_options',
-        'dc_image_feed',
-        'dc_image_feed_settings_page'
+        'Configurações do Feed de Imagens', // Page Title
+        'Image Feed', // Menu Title - Será um item de menu de nível superior em 'Configurações'
+        'manage_options', // Capability
+        'dc_image_feed', // Menu Slug (DEVE ser diferente de 'dc_feed_social')
+        'dc_image_feed_settings_page' // Callback function
     );
 });
 
@@ -131,13 +159,33 @@ function dc_image_feed_settings_page() {
     if (isset($_POST['submit'])) {
         check_admin_referer('dc_image_feed_settings_nonce'); // Nonce de segurança
 
-        $selected_ids = isset($_POST['dc_selected_image_ids']) ? array_map('intval', $_POST['dc_selected_image_ids']) : [];
-        update_option('dc_selected_image_ids', implode(',', $selected_ids));
+        $selected_ids_input = isset($_POST['dc_selected_image_ids']) ? (array) $_POST['dc_selected_image_ids'] : [];
+        $selected_ids = array_filter(array_map('intval', $selected_ids_input)); // Garante que sejam inteiros e remove vazios
 
-        $interval = isset($_POST['dc_image_feed_interval_hours']) ? absint($_POST['dc_image_feed_interval_hours']) : 24;
-        update_option('dc_image_feed_interval_hours', $interval);
+        // Antes de salvar, filtra quaisquer anexos inexistentes ou não-imagem da lista selecionada
+        $valid_selected_ids = [];
+        foreach ($selected_ids as $id) {
+            if (wp_attachment_is_image($id)) {
+                $valid_selected_ids[] = $id;
+            } else {
+                error_log("DC Image Feed Admin: Invalid image ID " . $id . " removed from selection."); // Debugging
+            }
+        }
+
+        // Salva as imagens selecionadas
+        update_option('dc_selected_image_ids', implode(',', $valid_selected_ids));
+
+        // Guarda o valor antigo do intervalo para comparar
+        $old_interval = get_option('dc_image_feed_interval_hours', 24);
+        $new_interval = isset($_POST['dc_image_feed_interval_hours']) ? absint($_POST['dc_image_feed_interval_hours']) : 24;
+        
+        // Salva o novo intervalo. Ação do hook 'update_option_dc_image_feed_interval_hours' cuidará da geração do feed.
+        update_option('dc_image_feed_interval_hours', $new_interval);
 
         echo '<div class="notice notice-success is-dismissible"><p>Configurações salvas!</p></div>';
+
+        // Linha removida: do_action('dc_feed_random_image_event');
+        // A geração forçada do feed agora ocorre APENAS quando a opção de intervalo é atualizada (via o hook 'update_option_dc_image_feed_interval_hours').
     }
 
     $selected_image_ids_str = get_option('dc_selected_image_ids', '');
@@ -196,6 +244,9 @@ function dc_image_feed_settings_page() {
             </div>
             <?php submit_button('Salvar Configurações'); ?>
         </form>
+        <hr>
+        <p><strong>URL do Feed de Imagens:</strong> <code><?php echo esc_url(home_url('/image-feed-social.xml')); ?></code></p>
+        <p><strong>Importante:</strong> Após a instalação inicial deste plugin ou se o feed não estiver funcionando, por favor, vá em <a href="<?php echo esc_url(admin_url('options-permalink.php')); ?>">Configurações > Links Permanentes</a> e clique em "Salvar Alterações" para atualizar as regras de reescrita do WordPress.</p>
     </div>
     <?php
 }
