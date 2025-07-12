@@ -30,6 +30,7 @@ add_action('dc_feed_random_post_event', function() {
     $previous_post_id = get_option('dc_feed_current_post');
     $max_attempts = 5;
     $attempt = 0;
+    $new_post_id = 0; // Initialize $new_post_id
 
     do {
         $posts = get_posts([
@@ -37,7 +38,9 @@ add_action('dc_feed_random_post_event', function() {
             'posts_per_page' => 1,
             'orderby'        => 'rand',
             'fields'         => 'ids',
-            'post_status'    => 'publish'
+            'post_status'    => 'publish',
+            // Exclude the previous post to ensure a different post is selected if possible
+            'post__not_in'   => ($previous_post_id && $attempt > 0) ? [$previous_post_id] : []
         ]);
 
         $new_post_id = $posts ? $posts[0] : 0;
@@ -46,7 +49,25 @@ add_action('dc_feed_random_post_event', function() {
     } while ($new_post_id === $previous_post_id && $attempt < $max_attempts);
 
     if ($new_post_id) {
+        // Unsticky the previous post if it exists and is different from the new one
+        if ($previous_post_id && $previous_post_id !== $new_post_id) {
+            unstick_post($previous_post_id);
+            // Optional: Log this action for debugging
+            // error_log("DC Feed: Unsticked previous post ID: " . $previous_post_id);
+        }
+
+        // Sticky the new post
+        stick_post($new_post_id);
         update_option('dc_feed_current_post', $new_post_id);
+        // Optional: Log this action for debugging
+        // error_log("DC Feed: Stickied new post ID: " . $new_post_id);
+    } else {
+        // If no new post is selected, ensure the previous one is unstickied to avoid orphaned sticky posts
+        if ($previous_post_id) {
+            unstick_post($previous_post_id);
+            update_option('dc_feed_current_post', 0); // Clear the option if no valid post is found
+            // error_log("DC Feed: No new post selected, unstickied previous post ID: " . $previous_post_id);
+        }
     }
 });
 
